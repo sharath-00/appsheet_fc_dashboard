@@ -1,0 +1,3 @@
+# Dependencies for Render.com deployment
+# server.py uses Python standard libraries (http.server, socketserver, urllib, json)
+# No external pip packages strictly required.

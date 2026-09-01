@@ -6,7 +6,7 @@ import json
 import os
 import sys
 
-PORT = 5180
+PORT = int(os.environ.get("PORT", 5180))
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 
 class CustomHandler(http.server.SimpleHTTPRequestHandler):
@@ -252,10 +252,12 @@ if __name__ == '__main__':
     socketserver.TCPServer.allow_reuse_address = True
     server_started = False
     
-    for current_port in [PORT, 5181, 5182, 8080]:
+    ports_to_try = [PORT] if "PORT" in os.environ else [PORT, 5181, 5182, 8080]
+    
+    for current_port in ports_to_try:
         try:
-            with socketserver.TCPServer(("", current_port), CustomHandler) as httpd:
-                print(f"\n[Server] Running at: http://localhost:{current_port}")
+            with socketserver.TCPServer(("0.0.0.0", current_port), CustomHandler) as httpd:
+                print(f"\n[Server] Running at: http://0.0.0.0:{current_port} (Port {current_port})")
                 print("Press Ctrl+C to stop.\n")
                 server_started = True
                 httpd.serve_forever()
@@ -264,6 +266,6 @@ if __name__ == '__main__':
             continue
             
     if not server_started:
-        print(f"\n[Info] A server instance is already running on http://localhost:{PORT}!")
+        print(f"\n[Info] A server instance is already running on port {PORT}!")
         print(f"👉 You can open http://localhost:{PORT} directly in your browser.\n")
 
