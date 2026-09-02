@@ -17,14 +17,14 @@ const DEFAULT_4_REGIONS = [
   { 
     id: 'vellore', 
     name: 'Vellore Region', 
-    sheetId: 'PASTE_VELLORE_SHEET_ID_HERE',
-    url: ''
+    sheetId: '1WyFV4gLhH7Y6D6GiM7Jj2iAcj8KobNMvWY-_sgqxSoE',
+    url: 'https://docs.google.com/spreadsheets/d/1WyFV4gLhH7Y6D6GiM7Jj2iAcj8KobNMvWY-_sgqxSoE/edit?gid=0#gid=0'
   },
   { 
     id: 'tiruppur', 
     name: 'Tiruppur Region', 
-    sheetId: 'PASTE_TIRUPPUR_SHEET_ID_HERE',
-    url: ''
+    sheetId: '1bPDHWkcnpJPM0wwtooGPR_JubRtO3RNB7e-5fWd-dbo',
+    url: 'https://docs.google.com/spreadsheets/d/1bPDHWkcnpJPM0wwtooGPR_JubRtO3RNB7e-5fWd-dbo/edit?gid=0#gid=0'
   }
 ];
 
@@ -160,7 +160,16 @@ function App() {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.some(r => r.id === 'coimbatore')) {
-          return parsed;
+          // Merge with DEFAULT_4_REGIONS so newly added default URLs/IDs are automatically populated
+          const merged = DEFAULT_4_REGIONS.map(def => {
+            const found = parsed.find(p => p.id === def.id);
+            if (!found) return def;
+            if (!found.sheetId || found.sheetId.includes('PASTE_') || !found.url) {
+              return { ...found, sheetId: def.sheetId, url: def.url };
+            }
+            return found;
+          }).concat(parsed.filter(p => !DEFAULT_4_REGIONS.some(def => def.id === p.id)));
+          return merged;
         }
       }
     } catch(e) {}
