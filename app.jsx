@@ -145,6 +145,43 @@ const getWeekKey = (dateStr) => {
   return 'Week 5 (Day 29-31)';
 };
 
+// Precise Date Normalizer into ISO YYYY-MM-DD
+const parseDateToISO = (dateStr) => {
+  if (!dateStr) return null;
+  if (typeof dateStr === 'number') {
+    const d = new Date((dateStr - (25567 + 2)) * 86400 * 1000);
+    return isNaN(d.getTime()) ? null : d.toISOString().split('T')[0];
+  }
+  const s = String(dateStr).trim();
+
+  // Format 1: YYYY-MM-DD or YYYY/MM/DD
+  const m1 = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (m1) {
+    return `${m1[1]}-${m1[2].padStart(2, '0')}-${m1[3].padStart(2, '0')}`;
+  }
+
+  // Format 2: M/D/YYYY or D/M/YYYY
+  const m2 = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (m2) {
+    const num1 = parseInt(m2[1], 10);
+    const num2 = parseInt(m2[2], 10);
+    const y = m2[3];
+    if (num1 > 12 && num2 <= 12) {
+      return `${y}-${String(num2).padStart(2, '0')}-${String(num1).padStart(2, '0')}`;
+    } else {
+      return `${y}-${String(num1).padStart(2, '0')}-${String(num2).padStart(2, '0')}`;
+    }
+  }
+
+  // Format 3: Google Sheets Date(y, m, d)
+  const m3 = s.match(/Date\((\d{4}),(\d{1,2}),(\d{1,2})/);
+  if (m3) {
+    return `${m3[1]}-${String(parseInt(m3[2], 10) + 1).padStart(2, '0')}-${m3[3].padStart(2, '0')}`;
+  }
+
+  return null;
+};
+
 function App() {
   const [activeTab, setActiveTab] = useState('fc_centric');
   const [rawTickets, setRawTickets] = useState([]);
@@ -197,11 +234,69 @@ function App() {
 
   // Filters State
   const [searchQuery, setSearchQuery] = useState('');
+  const [filterFromDate, setFilterFromDate] = useState('');
+  const [filterToDate, setFilterToDate] = useState('');
+  const [datePreset, setDatePreset] = useState('all');
   const [filterMonth, setFilterMonth] = useState('ALL');
   const [filterComplaintType, setFilterComplaintType] = useState('ALL');
   const [filterWorkStatus, setFilterWorkStatus] = useState('ALL');
   const [filterZone, setFilterZone] = useState('ALL');
   const [filterWattage, setFilterWattage] = useState('ALL');
+
+  // Date Presets Handler
+  const applyDatePreset = (preset) => {
+    setDatePreset(preset);
+    setFilterMonth('ALL');
+    setCurrentPage(1);
+    const today = new Date();
+    const formatISO = (d) => {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    };
+
+    if (preset === 'all') {
+      setFilterFromDate('');
+      setFilterToDate('');
+    } else if (preset === 'today') {
+      const todayStr = formatISO(today);
+      setFilterFromDate(todayStr);
+      setFilterToDate(todayStr);
+    } else if (preset === 'last7') {
+      const from = new Date(today);
+      from.setDate(today.getDate() - 7);
+      setFilterFromDate(formatISO(from));
+      setFilterToDate(formatISO(today));
+    } else if (preset === 'last30') {
+      const from = new Date(today);
+      from.setDate(today.getDate() - 30);
+      setFilterFromDate(formatISO(from));
+      setFilterToDate(formatISO(today));
+    } else if (preset === 'this_month') {
+      const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+      setFilterFromDate(formatISO(firstDay));
+      setFilterToDate(formatISO(today));
+    } else if (preset === 'last_month') {
+      const firstDay = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const lastDay = new Date(today.getFullYear(), today.getMonth(), 0);
+      setFilterFromDate(formatISO(firstDay));
+      setFilterToDate(formatISO(lastDay));
+    }
+  };
+
+  const resetAllFilters = () => {
+    setSearchQuery('');
+    setFilterMonth('ALL');
+    setFilterFromDate('');
+    setFilterToDate('');
+    setDatePreset('all');
+    setFilterComplaintType('ALL');
+    setFilterWorkStatus('ALL');
+    setFilterZone('ALL');
+    setFilterWattage('ALL');
+    setCurrentPage(1);
+  };
   
   // Modal & Add Region State
   const [showConfigModal, setShowConfigModal] = useState(false);
@@ -383,7 +478,7 @@ function App() {
     if (window.lucide) {
       setTimeout(() => window.lucide.createIcons(), 50);
     }
-  }, [showConfigModal, showAddRegionForm, loading, regionStatusMsg, activeTab]);
+  }, [showConfigModal, showAddRegionForm, loading, regionStatusMsg, activeTab, filterFromDate, filterToDate, filterMonth]);
 
   // Direct Live Google Sheets JSON Fetcher (Manual Trigger from Modal/Sync)
   const fetchGoogleSheetData = async (urlToFetch, showAlert = true) => {
@@ -565,6 +660,11 @@ function App() {
         item['Complaint Type'], item['Materials'], item['Location Details'], item['Remarks'], item['Lamp Watts']
       ].some(val => String(val || '').toLowerCase().includes(searchQuery.toLowerCase()));
 
+      // Date Range Filter
+      const isoDate = parseDateToISO(item['Submission Date/Time']);
+      const fromMatch = !filterFromDate || (isoDate && isoDate >= filterFromDate);
+      const toMatch = !filterToDate || (isoDate && isoDate <= filterToDate);
+
       // Dropdown Filters
       const monthMatch = filterMonth === 'ALL' || getMonthKey(item['Submission Date/Time']) === filterMonth;
       const complaintMatch = filterComplaintType === 'ALL' || cType === String(filterComplaintType).trim().toUpperCase();
@@ -572,9 +672,9 @@ function App() {
       const zoneMatch = filterZone === 'ALL' || normalizeZone(item['Zone']) === filterZone;
       const wattageMatch = filterWattage === 'ALL' || String(item['Lamp Watts'] || '').startsWith(filterWattage);
 
-      return searchMatch && monthMatch && complaintMatch && statusMatch && zoneMatch && wattageMatch;
+      return searchMatch && fromMatch && toMatch && monthMatch && complaintMatch && statusMatch && zoneMatch && wattageMatch;
     });
-  }, [rawTickets, searchQuery, filterMonth, filterComplaintType, filterWorkStatus, filterZone, filterWattage]);
+  }, [rawTickets, searchQuery, filterFromDate, filterToDate, filterMonth, filterComplaintType, filterWorkStatus, filterZone, filterWattage]);
 
   // Filtered Dataset for FC Centric View
   const filteredTickets = useMemo(() => {
@@ -589,6 +689,11 @@ function App() {
         item['Complaint Type'], item['Materials'], item['Location Details'], item['Remarks'], item['Lamp Watts']
       ].some(val => String(val || '').toLowerCase().includes(searchQuery.toLowerCase()));
 
+      // Date Range Filter
+      const isoDate = parseDateToISO(item['Submission Date/Time']);
+      const fromMatch = !filterFromDate || (isoDate && isoDate >= filterFromDate);
+      const toMatch = !filterToDate || (isoDate && isoDate <= filterToDate);
+
       // Dropdown Filters
       const monthMatch = filterMonth === 'ALL' || getMonthKey(item['Submission Date/Time']) === filterMonth;
       const complaintMatch = filterComplaintType === 'ALL' || cType === String(filterComplaintType).trim().toUpperCase();
@@ -596,9 +701,9 @@ function App() {
       const zoneMatch = filterZone === 'ALL' || normalizeZone(item['Zone']) === filterZone;
       const wattageMatch = filterWattage === 'ALL' || String(item['Lamp Watts'] || '').startsWith(filterWattage);
 
-      return searchMatch && monthMatch && complaintMatch && statusMatch && zoneMatch && wattageMatch;
+      return searchMatch && fromMatch && toMatch && monthMatch && complaintMatch && statusMatch && zoneMatch && wattageMatch;
     });
-  }, [rawTickets, fcFocusOnly, searchQuery, filterMonth, filterComplaintType, filterWorkStatus, filterZone, filterWattage]);
+  }, [rawTickets, fcFocusOnly, searchQuery, filterFromDate, filterToDate, filterMonth, filterComplaintType, filterWorkStatus, filterZone, filterWattage]);
 
   // Overall & FC Specific Metrics
   const metrics = useMemo(() => {
@@ -608,36 +713,27 @@ function App() {
       return cType === 'FC' || cType.includes('FITTING');
     });
 
-    // All FC tickets in raw dataset for monthly trends chart
+    // All FC tickets in raw dataset (honoring active Date Range if set)
     const allFcTickets = rawTickets.filter(t => {
       const cType = String(t['Complaint Type'] || '').trim().toUpperCase();
-      return cType === 'FC' || cType.includes('FITTING');
+      if (cType !== 'FC' && !cType.includes('FITTING')) return false;
+      const isoDate = parseDateToISO(t['Submission Date/Time']);
+      const fromMatch = !filterFromDate || (isoDate && isoDate >= filterFromDate);
+      const toMatch = !filterToDate || (isoDate && isoDate <= filterToDate);
+      return fromMatch && toMatch;
     });
 
     const fcCompleted = fcTickets.filter(t => (t['Work Status'] || '').includes('Completed')).length;
     const fcOnHold = fcTickets.filter(t => (t['Work Status'] || '').includes('On Hold')).length;
     const fcCompletionRate = fcTickets.length > 0 ? ((fcCompleted / fcTickets.length) * 100).toFixed(1) : 0;
 
-    // Period FC Counts & Wattage Breakdown (Month-wise if ALL, Week-wise if specific month selected)
+    // Period FC Counts & Wattage Breakdown (Month-wise, Week-wise, or Day-wise based on active filter)
     const fcPeriodCounts = {};
     const fcPeriodWattages = {};
 
-    if (filterMonth === 'ALL') {
-      allFcTickets.forEach(t => {
-        const mKey = getMonthKey(t['Submission Date/Time']);
-        fcPeriodCounts[mKey] = (fcPeriodCounts[mKey] || 0) + 1;
+    const isDateRangeActive = Boolean(filterFromDate || filterToDate);
 
-        if (!fcPeriodWattages[mKey]) {
-          fcPeriodWattages[mKey] = { '40W': 0, '120W': 0, '90W': 0, '70W': 0, '20W': 0 };
-        }
-        const rawWatts = String(t['Lamp Watts'] || '').trim();
-        if (rawWatts.startsWith('40')) fcPeriodWattages[mKey]['40W']++;
-        else if (rawWatts.startsWith('120')) fcPeriodWattages[mKey]['120W']++;
-        else if (rawWatts.startsWith('90')) fcPeriodWattages[mKey]['90W']++;
-        else if (rawWatts.startsWith('70')) fcPeriodWattages[mKey]['70W']++;
-        else if (rawWatts.startsWith('20')) fcPeriodWattages[mKey]['20W']++;
-      });
-    } else {
+    if (filterMonth !== 'ALL') {
       const WEEK_KEYS = ['Week 1 (Day 1-7)', 'Week 2 (Day 8-14)', 'Week 3 (Day 15-21)', 'Week 4 (Day 22-28)', 'Week 5 (Day 29-31)'];
       WEEK_KEYS.forEach(w => {
         fcPeriodCounts[w] = 0;
@@ -658,23 +754,64 @@ function App() {
         else if (rawWatts.startsWith('70')) fcPeriodWattages[wKey]['70W']++;
         else if (rawWatts.startsWith('20')) fcPeriodWattages[wKey]['20W']++;
       });
+    } else if (isDateRangeActive) {
+      // Sort chronologically
+      const sortedFc = [...fcTickets].sort((a, b) => {
+        const dA = parseDateToISO(a['Submission Date/Time']) || '';
+        const dB = parseDateToISO(b['Submission Date/Time']) || '';
+        return dA.localeCompare(dB);
+      });
+
+      const uniqueDays = new Set(sortedFc.map(t => parseDateToISO(t['Submission Date/Time'])).filter(Boolean));
+      const useDayGrouping = uniqueDays.size <= 35;
+
+      sortedFc.forEach(t => {
+        const iso = parseDateToISO(t['Submission Date/Time']);
+        const key = useDayGrouping ? (iso || 'Other') : getMonthKey(t['Submission Date/Time']);
+        fcPeriodCounts[key] = (fcPeriodCounts[key] || 0) + 1;
+
+        if (!fcPeriodWattages[key]) {
+          fcPeriodWattages[key] = { '40W': 0, '120W': 0, '90W': 0, '70W': 0, '20W': 0 };
+        }
+        const rawWatts = String(t['Lamp Watts'] || '').trim();
+        if (rawWatts.startsWith('40')) fcPeriodWattages[key]['40W']++;
+        else if (rawWatts.startsWith('120')) fcPeriodWattages[key]['120W']++;
+        else if (rawWatts.startsWith('90')) fcPeriodWattages[key]['90W']++;
+        else if (rawWatts.startsWith('70')) fcPeriodWattages[key]['70W']++;
+        else if (rawWatts.startsWith('20')) fcPeriodWattages[key]['20W']++;
+      });
+    } else {
+      allFcTickets.forEach(t => {
+        const mKey = getMonthKey(t['Submission Date/Time']);
+        fcPeriodCounts[mKey] = (fcPeriodCounts[mKey] || 0) + 1;
+
+        if (!fcPeriodWattages[mKey]) {
+          fcPeriodWattages[mKey] = { '40W': 0, '120W': 0, '90W': 0, '70W': 0, '20W': 0 };
+        }
+        const rawWatts = String(t['Lamp Watts'] || '').trim();
+        if (rawWatts.startsWith('40')) fcPeriodWattages[mKey]['40W']++;
+        else if (rawWatts.startsWith('120')) fcPeriodWattages[mKey]['120W']++;
+        else if (rawWatts.startsWith('90')) fcPeriodWattages[mKey]['90W']++;
+        else if (rawWatts.startsWith('70')) fcPeriodWattages[mKey]['70W']++;
+        else if (rawWatts.startsWith('20')) fcPeriodWattages[mKey]['20W']++;
+      });
     }
 
-    // FC Wattage Distribution (For active filtered month/zone)
+    // FC Wattage Distribution (For active filtered dataset)
     const fcWattages = {};
     fcTickets.forEach(t => {
       const w = t['Lamp Watts'] ? `${t['Lamp Watts']}W` : 'Unspecified';
       fcWattages[w] = (fcWattages[w] || 0) + 1;
     });
 
-    // FC Zone Breakdown (Normalized for active filtered month)
+    // FC Zone Breakdown (Normalized for active filtered dataset)
     const fcZones = {};
     fcTickets.forEach(t => {
       const z = normalizeZone(t['Zone']);
       fcZones[z] = (fcZones[z] || 0) + 1;
     });
 
-    // FC Technician Leaderboard (For active filtered month)
+    // FC Technician Leaderboard (For active filtered dataset)
     const fcTechs = {};
     fcTickets.forEach(t => {
       const tech = t['Technician Name'] || 'Unassigned';
@@ -689,7 +826,7 @@ function App() {
       fcOnHoldWattages[w] = (fcOnHoldWattages[w] || 0) + 1;
     });
 
-    // Global Metrics (Total = ALL ticket types in month/filters; FC = FC tickets specifically)
+    // Global Metrics (Total = ALL ticket types in active filters; FC = FC tickets specifically)
     const total = allTypeFilteredTickets.length;
     const completed = allTypeFilteredTickets.filter(t => (t['Work Status'] || '').includes('Completed')).length;
     const onHold = allTypeFilteredTickets.filter(t => (t['Work Status'] || '').includes('On Hold')).length;
@@ -710,7 +847,7 @@ function App() {
       fcPeriodWattages,
       pctOfTotal: total > 0 ? ((fcTickets.length / total) * 100).toFixed(1) : 0
     };
-  }, [rawTickets, filteredTickets, allTypeFilteredTickets, filterMonth]);
+  }, [rawTickets, filteredTickets, allTypeFilteredTickets, filterMonth, filterFromDate, filterToDate]);
 
   const uniqueZones = useMemo(() => Array.from(new Set(rawTickets.map(t => normalizeZone(t['Zone'])).filter(Boolean))).sort(), [rawTickets]);
   const uniqueWattages = ['40', '120', '90', '70', '20'];
@@ -743,18 +880,22 @@ function App() {
 
     Object.values(chartInstances.current).forEach(c => c && c.destroy());
 
-    // 1. Month-Wise / Week-Wise FC Count Line Chart
+    // 1. Month-Wise / Week-Wise / Date-Range FC Count Line Chart
     if (fcMonthTrendChartRef.current && activeTab === 'fc_centric') {
       const ctx = fcMonthTrendChartRef.current.getContext('2d');
       const periods = Object.keys(metrics.fcPeriodCounts);
       const counts = Object.values(metrics.fcPeriodCounts);
+
+      const chartLabel = (filterFromDate || filterToDate)
+        ? `FC Tickets (${filterFromDate || 'Start'} to ${filterToDate || 'Today'})`
+        : (filterMonth === 'ALL' ? 'Monthly FC Tickets' : `Weekly FC Tickets (${filterMonth})`);
 
       chartInstances.current.fcMonthTrend = new Chart(ctx, {
         type: 'line',
         data: {
           labels: periods,
           datasets: [{
-            label: filterMonth === 'ALL' ? 'Monthly FC Tickets' : `Weekly FC Tickets (${filterMonth})`,
+            label: chartLabel,
             data: counts,
             borderColor: '#06b6d4',
             backgroundColor: 'rgba(6, 182, 212, 0.15)',
@@ -1020,24 +1161,40 @@ function App() {
         </div>
       )}
 
-      {/* ACTIVE MONTH FOCUS BANNER */}
-      {activeTab !== 'appsheet_guide' && filterMonth !== 'ALL' && (
-        <div className="glass-panel" style={{ padding: '0.8rem 1.4rem', marginBottom: '1.2rem', background: 'linear-gradient(90deg, rgba(6,182,212,0.18), rgba(99,102,241,0.18))', border: '1px solid var(--accent-cyan)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.8rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+      {/* ACTIVE DATE / MONTH FOCUS BANNER */}
+      {activeTab !== 'appsheet_guide' && (Boolean(filterFromDate || filterToDate) || filterMonth !== 'ALL') && (
+        <div className="glass-panel" style={{ padding: '0.85rem 1.4rem', marginBottom: '1.2rem', background: 'linear-gradient(90deg, rgba(6,182,212,0.18), rgba(99,102,241,0.18))', border: '1px solid var(--accent-cyan)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.8rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
             <i data-lucide="calendar" style={{ color: 'var(--accent-cyan)', width: '22px', height: '22px' }}></i>
             <div>
-              <span style={{ fontWeight: '800', fontSize: '1rem', color: '#fff' }}>
-                Active Month Analytics Focus: <span style={{ color: 'var(--accent-cyan)' }}>{filterMonth}</span>
+              <span style={{ fontWeight: '800', fontSize: '0.98rem', color: '#fff' }}>
+                {filterFromDate || filterToDate ? (
+                  <>
+                    Active Date Range Filter: <span style={{ color: 'var(--accent-cyan)' }}>{filterFromDate || 'Start'}</span> ➔ <span style={{ color: 'var(--accent-cyan)' }}>{filterToDate || 'Today'}</span>
+                    <span className="badge badge-info" style={{ marginLeft: '0.6rem', fontSize: '0.75rem' }}>
+                      {filteredTickets.length.toLocaleString()} FC Tickets Found
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    Active Month Analytics Focus: <span style={{ color: 'var(--accent-cyan)' }}>{filterMonth}</span>
+                    <span className="badge badge-info" style={{ marginLeft: '0.6rem', fontSize: '0.75rem' }}>
+                      {filteredTickets.length.toLocaleString()} FC Tickets Found
+                    </span>
+                  </>
+                )}
               </span>
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: 0 }}>All KPI cards, wattage charts, zone densities, and material requirements below are filtered specifically for {filterMonth}</p>
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0.2rem 0 0 0' }}>
+                All KPI metrics, trend charts, wattage breakdowns, zone distributions, materials matrix, and registry table are filtered specifically for this period.
+              </p>
             </div>
           </div>
           <button 
-            onClick={() => setFilterMonth('ALL')} 
+            onClick={() => { setFilterFromDate(''); setFilterToDate(''); setFilterMonth('ALL'); setDatePreset('all'); setCurrentPage(1); }} 
             className="btn btn-secondary" 
-            style={{ fontSize: '0.75rem', padding: '0.35rem 0.9rem', borderRadius: '8px' }}
+            style={{ fontSize: '0.75rem', padding: '0.4rem 0.9rem', borderRadius: '8px' }}
           >
-            ✕ Reset to Full Year View
+            ✕ Reset to Full View
           </button>
         </div>
       )}
@@ -1051,7 +1208,7 @@ function App() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  {filterMonth === 'ALL' ? 'Total Tickets' : `Total Tickets (${filterMonth})`}
+                  {(filterFromDate || filterToDate) ? `Total Tickets (${filterFromDate || 'Start'} to ${filterToDate || 'Today'})` : (filterMonth === 'ALL' ? 'Total Tickets' : `Total Tickets (${filterMonth})`)}
                 </span>
                 <h3 style={{ fontSize: '2rem', fontWeight: '800', margin: '0.4rem 0 0 0', color: '#fff' }}>
                   {loading ? '0' : metrics.total.toLocaleString()}
@@ -1062,7 +1219,7 @@ function App() {
               </div>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'var(--text-dim)', marginTop: '0.6rem' }}>
-              {loading ? 'Loading tickets...' : (filterMonth === 'ALL' ? 'All fault ticket entries logged' : `Fault tickets logged in ${filterMonth}`)}
+              {loading ? 'Loading tickets...' : ((filterFromDate || filterToDate) ? `All complaint types logged within date filter` : (filterMonth === 'ALL' ? 'All fault ticket entries logged' : `Fault tickets logged in ${filterMonth}`))}
             </p>
           </div>
 
@@ -1071,7 +1228,7 @@ function App() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  {filterMonth === 'ALL' ? 'FC (Fitting Change) Tickets' : `FC Tickets (${filterMonth})`}
+                  {(filterFromDate || filterToDate) ? `FC Tickets (${filterFromDate || 'Start'} to ${filterToDate || 'Today'})` : (filterMonth === 'ALL' ? 'FC (Fitting Change) Tickets' : `FC Tickets (${filterMonth})`)}
                 </span>
                 <h3 style={{ fontSize: '2rem', fontWeight: '800', margin: '0.4rem 0 0 0', color: '#38bdf8' }}>
                   {loading ? '0' : metrics.fcTotal.toLocaleString()}
@@ -1082,7 +1239,7 @@ function App() {
               </div>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'var(--text-dim)', marginTop: '0.6rem' }}>
-              {loading ? '0% completed' : `${metrics.pctOfTotal}% of ${filterMonth === 'ALL' ? 'all tickets' : filterMonth} (${metrics.fcCompleted.toLocaleString()} completed)`}
+              {loading ? '0% completed' : `${metrics.pctOfTotal}% of period total (${metrics.fcCompleted.toLocaleString()} completed)`}
             </p>
           </div>
 
@@ -1091,7 +1248,7 @@ function App() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  {filterMonth === 'ALL' ? 'FC Material Hold' : `FC Material Hold (${filterMonth})`}
+                  {(filterFromDate || filterToDate) ? `FC Material Hold (${filterFromDate || 'Start'} to ${filterToDate || 'Today'})` : (filterMonth === 'ALL' ? 'FC Material Hold' : `FC Material Hold (${filterMonth})`)}
                 </span>
                 <h3 style={{ fontSize: '2rem', fontWeight: '800', margin: '0.4rem 0 0 0', color: '#fbbf24' }}>
                   {loading ? '0' : metrics.fcOnHold.toLocaleString()}
@@ -1138,7 +1295,7 @@ function App() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  {filterMonth === 'ALL' ? 'Primary Fitting Type' : `Primary Fitting (${filterMonth})`}
+                  {(filterFromDate || filterToDate) ? `Primary Fitting (${filterFromDate || 'Start'} to ${filterToDate || 'Today'})` : (filterMonth === 'ALL' ? 'Primary Fitting Type' : `Primary Fitting (${filterMonth})`)}
                 </span>
                 <h3 style={{ fontSize: '1.6rem', fontWeight: '800', margin: '0.4rem 0 0 0', color: '#a78bfa' }}>
                   {loading ? '--' : (metrics.fcTotal === 0 ? 'None' : (Object.entries(metrics.fcWattages).sort((a,b) => b[1]-a[1])[0]?.[0] || 'None'))}
@@ -1156,59 +1313,167 @@ function App() {
         </div>
       )}
 
-      {/* FILTER BAR */}
+      {/* FILTER & DATE RANGE CONTROL BAR */}
       {activeTab !== 'appsheet_guide' && (
-        <div className="glass-panel" style={{ padding: '1rem 1.5rem', marginBottom: '1.5rem', display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
-          <div style={{ position: 'relative', flex: 1, minWidth: '250px' }}>
-            <input 
-              type="text" 
-              placeholder="Search FC ID, technician, wattage, ward, remarks..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="glass-input"
-              style={{ width: '100%', paddingLeft: '2.5rem' }}
-            />
-            <i data-lucide="search" style={{ position: 'absolute', left: '0.8rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)', width: '18px', height: '18px' }}></i>
+        <div className="glass-panel" style={{ padding: '1.2rem 1.6rem', marginBottom: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          
+          {/* Row 1: Search & Category Dropdowns */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '0.85rem' }}>
+            <div style={{ position: 'relative', flex: 1, minWidth: '260px' }}>
+              <input 
+                type="text" 
+                placeholder="Search FC ID, technician, wattage, ward, remarks..."
+                value={searchQuery}
+                onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+                className="glass-input"
+                style={{ width: '100%', paddingLeft: '2.5rem' }}
+              />
+              <i data-lucide="search" style={{ position: 'absolute', left: '0.8rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)', width: '18px', height: '18px' }}></i>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+              
+              {/* Month-Wise Filter */}
+              <select 
+                value={filterMonth} 
+                onChange={(e) => { 
+                  setFilterMonth(e.target.value); 
+                  if (e.target.value !== 'ALL') {
+                    setFilterFromDate('');
+                    setFilterToDate('');
+                    setDatePreset('all');
+                  }
+                  setCurrentPage(1); 
+                }} 
+                className="glass-input"
+                style={{ borderColor: filterMonth !== 'ALL' ? 'var(--accent-cyan)' : 'var(--border-color)', fontWeight: filterMonth !== 'ALL' ? '700' : 'normal' }}
+              >
+                <option value="ALL" style={{ background: '#0f172a' }}>📅 All Months (Full Year)</option>
+                {uniqueMonths.map(m => (
+                  <option key={m} value={m} style={{ background: '#0f172a' }}>🗓️ {m} Analytics</option>
+                ))}
+              </select>
+
+              {/* Lamp Wattage Filter */}
+              <select value={filterWattage} onChange={(e) => { setFilterWattage(e.target.value); setCurrentPage(1); }} className="glass-input">
+                <option value="ALL" style={{ background: '#0f172a' }}>All Fitting Wattages</option>
+                {uniqueWattages.map(w => (
+                  <option key={w} value={w} style={{ background: '#0f172a' }}>{w}W Fittings</option>
+                ))}
+              </select>
+
+              {/* Zone Filter */}
+              <select value={filterZone} onChange={(e) => { setFilterZone(e.target.value); setCurrentPage(1); }} className="glass-input">
+                <option value="ALL" style={{ background: '#0f172a' }}>All Zones</option>
+                {uniqueZones.map(z => (
+                  <option key={z} value={z} style={{ background: '#0f172a' }}>{z}</option>
+                ))}
+              </select>
+
+              {/* Work Status Filter */}
+              <select value={filterWorkStatus} onChange={(e) => { setFilterWorkStatus(e.target.value); setCurrentPage(1); }} className="glass-input">
+                <option value="ALL" style={{ background: '#0f172a' }}>All Statuses</option>
+                <option value="Completed" style={{ background: '#0f172a' }}>Completed FCs</option>
+                <option value="On Hold : Materials Required" style={{ background: '#0f172a' }}>On Hold FCs</option>
+              </select>
+            </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          {/* Row 2: Date Range Filter (From Date / To Date) & Quick Presets */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '0.85rem', paddingTop: '0.85rem', borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
             
-            {/* Month-Wise Filter */}
-            <select 
-              value={filterMonth} 
-              onChange={(e) => setFilterMonth(e.target.value)} 
-              className="glass-input"
-              style={{ borderColor: filterMonth !== 'ALL' ? 'var(--accent-cyan)' : 'var(--border-color)', fontWeight: filterMonth !== 'ALL' ? '700' : 'normal' }}
-            >
-              <option value="ALL" style={{ background: '#0f172a' }}>📅 All Months (Full Year)</option>
-              {uniqueMonths.map(m => (
-                <option key={m} value={m} style={{ background: '#0f172a' }}>🗓️ {m} Analytics</option>
-              ))}
-            </select>
+            {/* From Date & To Date Inputs */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--accent-cyan)', fontSize: '0.82rem', fontWeight: '700' }}>
+                <i data-lucide="calendar-range" style={{ width: '16px', height: '16px' }}></i>
+                <span>Date Range:</span>
+              </div>
 
-            {/* Lamp Wattage Filter */}
-            <select value={filterWattage} onChange={(e) => setFilterWattage(e.target.value)} className="glass-input">
-              <option value="ALL" style={{ background: '#0f172a' }}>All Fitting Wattages</option>
-              {uniqueWattages.map(w => (
-                <option key={w} value={w} style={{ background: '#0f172a' }}>{w}W Fittings</option>
-              ))}
-            </select>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(15, 23, 42, 0.6)', padding: '0.25rem 0.6rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: '600' }}>FROM</span>
+                <input 
+                  type="date" 
+                  value={filterFromDate}
+                  onChange={(e) => {
+                    setFilterFromDate(e.target.value);
+                    setFilterMonth('ALL');
+                    setDatePreset('custom');
+                    setCurrentPage(1);
+                  }}
+                  className="glass-input"
+                  style={{ padding: '0.3rem 0.55rem', fontSize: '0.82rem', colorScheme: 'dark', border: 'none', background: 'transparent' }}
+                />
+              </div>
 
-            {/* Zone Filter */}
-            <select value={filterZone} onChange={(e) => setFilterZone(e.target.value)} className="glass-input">
-              <option value="ALL" style={{ background: '#0f172a' }}>All Zones</option>
-              {uniqueZones.map(z => (
-                <option key={z} value={z} style={{ background: '#0f172a' }}>{z}</option>
-              ))}
-            </select>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(15, 23, 42, 0.6)', padding: '0.25rem 0.6rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: '600' }}>TO</span>
+                <input 
+                  type="date" 
+                  value={filterToDate}
+                  onChange={(e) => {
+                    setFilterToDate(e.target.value);
+                    setFilterMonth('ALL');
+                    setDatePreset('custom');
+                    setCurrentPage(1);
+                  }}
+                  className="glass-input"
+                  style={{ padding: '0.3rem 0.55rem', fontSize: '0.82rem', colorScheme: 'dark', border: 'none', background: 'transparent' }}
+                />
+              </div>
 
-            {/* Work Status Filter */}
-            <select value={filterWorkStatus} onChange={(e) => setFilterWorkStatus(e.target.value)} className="glass-input">
-              <option value="ALL" style={{ background: '#0f172a' }}>All Statuses</option>
-              <option value="Completed" style={{ background: '#0f172a' }}>Completed FCs</option>
-              <option value="On Hold : Materials Required" style={{ background: '#0f172a' }}>On Hold FCs</option>
-            </select>
+              {(filterFromDate || filterToDate) && (
+                <button 
+                  onClick={() => { setFilterFromDate(''); setFilterToDate(''); setDatePreset('all'); setCurrentPage(1); }}
+                  className="btn btn-secondary"
+                  style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem', borderRadius: '8px' }}
+                  title="Clear Date Filter"
+                >
+                  ✕ Clear Dates
+                </button>
+              )}
+            </div>
+
+            {/* Quick Range Presets */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: '600', marginRight: '0.2rem' }}>Presets:</span>
+              {[
+                { id: 'all', label: 'All Time' },
+                { id: 'today', label: 'Today' },
+                { id: 'last7', label: 'Last 7 Days' },
+                { id: 'last30', label: 'Last 30 Days' },
+                { id: 'this_month', label: 'This Month' },
+                { id: 'last_month', label: 'Last Month' }
+              ].map(p => (
+                <button
+                  key={p.id}
+                  onClick={() => applyDatePreset(p.id)}
+                  style={{
+                    background: datePreset === p.id && (filterFromDate || filterToDate || p.id === 'all') ? 'rgba(6, 182, 212, 0.2)' : 'rgba(30, 41, 59, 0.6)',
+                    color: datePreset === p.id && (filterFromDate || filterToDate || p.id === 'all') ? 'var(--accent-cyan)' : 'var(--text-muted)',
+                    border: `1px solid ${datePreset === p.id && (filterFromDate || filterToDate || p.id === 'all') ? 'var(--accent-cyan)' : 'var(--border-color)'}`,
+                    borderRadius: '6px',
+                    padding: '0.25rem 0.6rem',
+                    fontSize: '0.75rem',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  {p.label}
+                </button>
+              ))}
+
+              <button 
+                onClick={resetAllFilters}
+                className="btn btn-secondary"
+                style={{ padding: '0.35rem 0.8rem', fontSize: '0.75rem', borderRadius: '8px', marginLeft: '0.4rem' }}
+              >
+                ✕ Reset All
+              </button>
+            </div>
+
           </div>
+
         </div>
       )}
 
@@ -1216,28 +1481,28 @@ function App() {
       {activeTab === 'fc_centric' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(450px, 1fr))', gap: '1.5rem' }}>
           
-          {/* 1. Month-Wise / Week-Wise FC Ticket Trend */}
+          {/* 1. Month-Wise / Week-Wise / Date-Range FC Ticket Trend */}
           <div className="glass-panel" style={{ padding: '1.5rem' }}>
             <h3 style={{ fontSize: '1.1rem', fontWeight: '700', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <i data-lucide="trending-up" style={{ color: 'var(--accent-cyan)', width: '20px', height: '20px' }}></i>
-              {filterMonth === 'ALL' ? 'Month-Wise Fitting Change (FC) Ticket Volume' : `Week-Wise Fitting Change (FC) Ticket Volume (${filterMonth})`}
+              {(filterFromDate || filterToDate) ? `Fitting Change (FC) Ticket Trend (${filterFromDate || 'Start'} to ${filterToDate || 'Today'})` : (filterMonth === 'ALL' ? 'Month-Wise Fitting Change (FC) Ticket Volume' : `Week-Wise Fitting Change (FC) Ticket Volume (${filterMonth})`)}
             </h3>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-              {filterMonth === 'ALL' ? 'Monthly trend of Fitting Changes logged across the region' : `Weekly trend of Fitting Changes logged in ${filterMonth}`}
+              {(filterFromDate || filterToDate) ? 'Trend of Fitting Changes logged across the selected date range' : (filterMonth === 'ALL' ? 'Monthly trend of Fitting Changes logged across the region' : `Weekly trend of Fitting Changes logged in ${filterMonth}`)}
             </p>
             <div className="chart-container">
               <canvas ref={fcMonthTrendChartRef}></canvas>
             </div>
           </div>
 
-          {/* 2. Month-Wise / Week-Wise Lamp Watts Breakdown */}
+          {/* 2. Month-Wise / Week-Wise / Date-Range Lamp Watts Breakdown */}
           <div className="glass-panel" style={{ padding: '1.5rem' }}>
             <h3 style={{ fontSize: '1.1rem', fontWeight: '700', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <i data-lucide="layers" style={{ color: 'var(--accent-indigo)', width: '20px', height: '20px' }}></i>
-              {filterMonth === 'ALL' ? 'Month-Wise Lamp Watts Distribution (40W, 120W, 90W, 70W)' : `Week-Wise Lamp Watts Distribution (${filterMonth})`}
+              {(filterFromDate || filterToDate) ? `Lamp Watts Distribution (${filterFromDate || 'Start'} to ${filterToDate || 'Today'})` : (filterMonth === 'ALL' ? 'Month-Wise Lamp Watts Distribution (40W, 120W, 90W, 70W)' : `Week-Wise Lamp Watts Distribution (${filterMonth})`)}
             </h3>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-              {filterMonth === 'ALL' ? 'Stacked breakdown of replaced fitting wattages by month' : `Stacked breakdown of replaced fitting wattages by week in ${filterMonth}`}
+              {(filterFromDate || filterToDate) ? 'Stacked breakdown of replaced fitting wattages in the selected date range' : (filterMonth === 'ALL' ? 'Stacked breakdown of replaced fitting wattages by month' : `Stacked breakdown of replaced fitting wattages by week in ${filterMonth}`)}
             </p>
             <div className="chart-container">
               <canvas ref={fcMonthWattageChartRef}></canvas>
@@ -1248,10 +1513,10 @@ function App() {
           <div className="glass-panel" style={{ padding: '1.5rem' }}>
             <h3 style={{ fontSize: '1.1rem', fontWeight: '700', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <i data-lucide="bar-chart-2" style={{ color: 'var(--accent-cyan)', width: '20px', height: '20px' }}></i>
-              FC Count by Lamp Wattage {filterMonth !== 'ALL' ? `(${filterMonth})` : ''}
+              FC Count by Lamp Wattage {(filterFromDate || filterToDate) ? `(${filterFromDate || 'Start'} to ${filterToDate || 'Today'})` : (filterMonth !== 'ALL' ? `(${filterMonth})` : '')}
             </h3>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-              {filterMonth === 'ALL' ? 'Total fitting replacements by wattage' : `Fitting replacements in ${filterMonth} by wattage`}
+              {(filterFromDate || filterToDate) ? 'Fitting replacements in the selected date range by wattage' : (filterMonth === 'ALL' ? 'Total fitting replacements by wattage' : `Fitting replacements in ${filterMonth} by wattage`)}
             </p>
             <div className="chart-container">
               <canvas ref={fcWattageChartRef}></canvas>
@@ -1262,10 +1527,10 @@ function App() {
           <div className="glass-panel" style={{ padding: '1.5rem' }}>
             <h3 style={{ fontSize: '1.1rem', fontWeight: '700', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <i data-lucide="pie-chart" style={{ color: 'var(--accent-purple)', width: '20px', height: '20px' }}></i>
-              Fitting Change Density by Zone {filterMonth !== 'ALL' ? `(${filterMonth})` : ''}
+              Fitting Change Density by Zone {(filterFromDate || filterToDate) ? `(${filterFromDate || 'Start'} to ${filterToDate || 'Today'})` : (filterMonth !== 'ALL' ? `(${filterMonth})` : '')}
             </h3>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-              {filterMonth === 'ALL' ? 'Regional breakdown of Fitting Change requirements' : `Zone breakdown of Fitting Changes in ${filterMonth}`}
+              {(filterFromDate || filterToDate) ? 'Zone breakdown of Fitting Changes in the selected date range' : (filterMonth === 'ALL' ? 'Regional breakdown of Fitting Change requirements' : `Zone breakdown of Fitting Changes in ${filterMonth}`)}
             </p>
             <div className="chart-container">
               <canvas ref={fcZoneChartRef}></canvas>
@@ -1305,7 +1570,7 @@ function App() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.2rem', flexWrap: 'wrap', gap: '0.8rem' }}>
             <div>
               <h3 style={{ fontSize: '1.25rem', fontWeight: '800', margin: 0, color: '#fff' }}>
-                Fitting Change (FC) Material Requirements Matrix {filterMonth !== 'ALL' ? `(${filterMonth})` : ''}
+                Fitting Change (FC) Material Requirements Matrix {(filterFromDate || filterToDate) ? `(${filterFromDate || 'Start'} to ${filterToDate || 'Today'})` : (filterMonth !== 'ALL' ? `(${filterMonth})` : '')}
               </h3>
               <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.25rem 0 0 0' }}>
                 Total replacement units required and active stock-out on-hold counts categorized by lamp wattage
@@ -1371,7 +1636,7 @@ function App() {
                     On-Hold FC Tickets by Lamp Wattage ({metrics.fcOnHold.toLocaleString()} Total On-Hold)
                   </h4>
                   <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.2rem 0 0 0' }}>
-                    Specific fitting wattages currently stalled due to material stock-out {filterMonth !== 'ALL' ? `for ${filterMonth}` : ''}
+                    Specific fitting wattages currently stalled due to material stock-out {(filterFromDate || filterToDate) ? `for ${filterFromDate || 'Start'} to ${filterToDate || 'Today'}` : (filterMonth !== 'ALL' ? `for ${filterMonth}` : '')}
                   </p>
                 </div>
               </div>
