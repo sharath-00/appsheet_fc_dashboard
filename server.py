@@ -116,7 +116,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             csv_export_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
             try:
                 req = urllib.request.Request(csv_export_url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req) as response:
+                with urllib.request.urlopen(req, timeout=6) as response:
                     content = response.read().decode('utf-8')
                     reader = csv.DictReader(io.StringIO(content))
                     rows = list(reader)
@@ -134,7 +134,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             gviz_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:json&tq=select%20*&headers=1&gid={gid}"
             try:
                 req = urllib.request.Request(gviz_url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req) as response:
+                with urllib.request.urlopen(req, timeout=6) as response:
                     raw_text = response.read().decode('utf-8')
                     match = re.search(r'google\.visualization\.Query\.setResponse\((.*)\);', raw_text)
                     if not match:
@@ -169,12 +169,31 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_header('Content-Type', 'application/json; charset=utf-8')
                     self.end_headers()
                     self.wfile.write(json.dumps(rows, indent=2).encode('utf-8'))
+                    return
 
             except Exception as e:
-                self.send_response(500)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+                print(f"Online sheet fetch failed: {e}")
+
+            # Attempt 3: Local cached fallback for offline / disconnected situations
+            if sheet_id == '19hEpNyOUgLCEmq5_QZqF60c7u1ph2QkueCPEpXx63oc' or 'coimbatore' in sheet_id.lower():
+                local_cb = os.path.join(DIRECTORY, 'coimbatore_data.json')
+                if os.path.exists(local_cb):
+                    try:
+                        with open(local_cb, 'r', encoding='utf-8') as f:
+                            local_data = f.read()
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/json; charset=utf-8')
+                        self.end_headers()
+                        self.wfile.write(local_data.encode('utf-8'))
+                        return
+                    except Exception as fe:
+                        print(f"Local fallback read error: {fe}")
+
+            # If all failed, return empty array rather than 500 so UI does not crash
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(b'[]')
 
         elif self.path.startswith('/api/proxy-sheets-v4'):
             from urllib.parse import parse_qs, urlparse
@@ -245,23 +264,61 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+        elif self.path.startswith('/api/inward-data'):
+            try:
+                json_path = os.path.join(DIRECTORY, 'inward_register_data.json')
+                if os.path.exists(json_path):
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        data = f.read()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(data.encode('utf-8'))
+                else:
+                    self.send_response(404)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "inward_register_data.json not found"}).encode('utf-8'))
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+        elif self.path.startswith('/api/regional-fc-summary'):
+            try:
+                json_path = os.path.join(DIRECTORY, 'regional_fc_summary.json')
+                if os.path.exists(json_path):
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        data = f.read()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(data.encode('utf-8'))
+                else:
+                    self.send_response(404)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "regional_fc_summary.json not found"}).encode('utf-8'))
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
         else:
             super().do_GET()
 
 if __name__ == '__main__':
-    socketserver.TCPServer.allow_reuse_address = True
     server_started = False
-    
     ports_to_try = [PORT] if "PORT" in os.environ else [PORT, 5181, 5182, 8080]
     
     for current_port in ports_to_try:
         try:
-            with socketserver.TCPServer(("0.0.0.0", current_port), CustomHandler) as httpd:
-                print(f"\n[Server] Running at: http://0.0.0.0:{current_port} (Port {current_port})")
-                print("Press Ctrl+C to stop.\n")
-                server_started = True
-                httpd.serve_forever()
-                break
+            httpd = http.server.ThreadingHTTPServer(("0.0.0.0", current_port), CustomHandler)
+            print(f"\n[Server] Multi-threaded server running at: http://0.0.0.0:{current_port} (Port {current_port})")
+            print("Press Ctrl+C to stop.\n")
+            server_started = True
+            httpd.serve_forever()
+            break
         except OSError:
             continue
             
